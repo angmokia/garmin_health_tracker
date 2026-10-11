@@ -589,6 +589,12 @@ def demo_data(days: int):
                              max_hr=float(rng.normal(172, 4)), kcal=km * 70, load=km * 14 + float(rng.normal(0, 8)),
                              te_aer=float(rng.normal(3.0, .4)), te_ana=0.6, vo2max=round(47 + 2.5 * prog + rng.normal(0, .3)),
                              elev_gain=km * 8, cadence=float(rng.normal(166, 3)), sets=None, reps=None))
+        if wd == 5 and rng.random() > 0.7:
+            aid += 1
+            acts.append(dict(id=aid, name="Shakeout Run", start=d + pd.Timedelta(hours=18), type="running",
+                             distance_km=3.0, duration_min=3.0 * 6.2, avg_hr=140.0, max_hr=155.0, kcal=210.0,
+                             load=30.0, te_aer=2.0, te_ana=0.2, vo2max=None, elev_gain=20.0, cadence=164.0,
+                             sets=None, reps=None))
     act = pd.DataFrame(acts)
     act["date"] = act["start"].dt.normalize()
     load_by_day = act.groupby("date")["load"].sum().reindex(dates, fill_value=0)
@@ -1016,7 +1022,8 @@ with tabs[3]:
         ])
 
         section("Volume & fitness")
-        wk_km = runs.set_index("date")["distance_km"].reindex(all_days, fill_value=0).resample(
+        # groupby first: two runs on one day would give duplicate dates, which reindex can't handle
+        wk_km = runs.groupby("date")["distance_km"].sum().reindex(all_days, fill_value=0).resample(
             "W-MON", label="left", closed="left").sum()
         fig = go.Figure(go.Bar(x=wk_km.index, y=wk_km, name="Weekly km", marker_color=C["blue"],
                                hovertemplate="%{y:.1f} km<extra>Week</extra>"))
@@ -1024,7 +1031,7 @@ with tabs[3]:
                                  line=dict(color=C["orange"], width=2), hovertemplate="%{y:.1f} km<extra>4-wk avg</extra>"))
         fig.update_layout(**base_layout("Weekly running distance (km)"))
 
-        rp = runs.set_index("date")
+        rp = runs.set_index("start").sort_index()  # start time is unique per run; date isn't
         pace_fig = go.Figure(go.Scatter(x=rp.index, y=rp["pace"], mode="markers", name="Run",
                                         marker=dict(color=C["blue"], size=np.clip(rp["distance_km"] * 2, 6, 20), opacity=0.6,
                                                     line=dict(color=PAPER_BG, width=1)),
