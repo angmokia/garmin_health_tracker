@@ -712,10 +712,16 @@ acts["load_eff"] = pd.to_numeric(acts["load"], errors="coerce").fillna(acts["dur
 acts["kind"] = np.select([acts["type"].str.contains("strength"), acts["type"].str.contains("running")],
                          ["Strength", "Running"], "Other")
 runs = acts[acts["kind"] == "Running"].copy()
+# Accidental starts (e.g. 11 m in 2 min) wreck pace stats: ignore anything under 0.5 km or 3 min
+junk_runs = runs[(runs["distance_km"] < 0.5) | (runs["duration_min"] < 3)]
+runs = runs.drop(junk_runs.index)
 lifts = acts[acts["kind"] == "Strength"].copy()
 if not runs.empty:
     runs["pace"] = runs["duration_min"] / runs["distance_km"].replace(0, np.nan)
+    # Walk breaks / GPS glitches outside 2:30–15:00 /km aren't meaningful running paces
+    runs.loc[~runs["pace"].between(2.5, 15), "pace"] = np.nan
     runs["efficiency"] = (runs["distance_km"] * 1000 / runs["duration_min"]) / runs["avg_hr"]  # m per heartbeat
+    runs.loc[runs["pace"].isna(), "efficiency"] = np.nan
 
 MUSCLE = {
     "Chest": ["BENCH_PRESS", "CHEST_FLYE", "FLYE", "PUSH_UP"],
@@ -1004,9 +1010,14 @@ with tabs[2]:
 
 # ── 4. Running ───────────────────────────────────────────────────────────────────
 with tabs[3]:
+    if not junk_runs.empty:
+        st.caption(f"Ignoring {len(junk_runs)} accidental run recording(s) under 0.5 km or 3 min.")
     if runs.empty:
         st.info("No runs in this period.")
     else:
+        if len(runs) < 6:
+            st.caption(f"Only {len(runs)} run(s) in the selected period — trends (median pace, efficiency) "
+                       "need a few more runs to mean much.")
         last28 = pd.Timestamp(TODAY) - pd.Timedelta(days=28)
         r28 = runs[runs["date"] > last28]
         vo2, vo2_d = _last(runs.set_index("date")["vo2max"].astype(float))
@@ -1031,17 +1042,20 @@ with tabs[3]:
                                  line=dict(color=C["orange"], width=2), hovertemplate="%{y:.1f} km<extra>4-wk avg</extra>"))
         fig.update_layout(**base_layout("Weekly running distance (km)"))
 
-        rp = runs.set_index("start").sort_index()  # start time is unique per run; date isn't
+        rp = runs.set_index("start").sort_index().dropna(subset=["pace"])  # start time is unique per run; date isn't
         pace_fig = go.Figure(go.Scatter(x=rp.index, y=rp["pace"], mode="markers", name="Run",
                                         marker=dict(color=C["blue"], size=np.clip(rp["distance_km"] * 2, 6, 20), opacity=0.6,
                                                     line=dict(color=PAPER_BG, width=1)),
                                         customdata=np.c_[rp["pace"].map(_fmt_pace), rp["distance_km"]],
                                         hovertemplate="%{customdata[0]} /km · %{customdata[1]:.1f} km<extra></extra>"))
-        if len(rp) >= 4:
+        if len(rp) >= 6:
             pace_fig.add_trace(go.Scatter(x=rp.index, y=rp["pace"].rolling(5, min_periods=2).median(), name="5-run median",
                                           line=dict(color=C["blue"], width=2), hoverinfo="skip"))
         lay = base_layout("Pace (min/km, lower = faster; dot size = distance)")
-        ticks = np.arange(np.floor(rp["pace"].min() * 4) / 4, rp["pace"].max() + 0.25, 0.25)
+        # Pick a tick step that gives ~4–8 labels whatever the spread (15 s, 30 s, 1 min, 2 min…)
+        lo_p, hi_p = rp["pace"].min(), rp["pace"].max()
+        step = next((st_ for st_ in (0.25, 0.5, 1, 2, 5) if (hi_p - lo_p) / st_ <= 6), 5)
+        ticks = np.arange(np.floor(lo_p / step) * step, hi_p + step, step)
         lay.update(yaxis=dict(autorange="reversed", gridcolor=GRID_COLOR,
                               tickvals=ticks, ticktext=[_fmt_pace(t) for t in ticks]))
         pace_fig.update_layout(**lay)
